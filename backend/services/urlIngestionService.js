@@ -44,7 +44,12 @@ export async function ingestUrl(rawUrl, documentId, userId) {
     throw new Error(`Could not connect to URL "${targetUrl}": ${fetchErr.message}`);
   }
 
-  if (!res.ok) {
+  const isYouTube = urlObj.hostname.includes("youtube.com") || urlObj.hostname.includes("youtu.be");
+
+  // YouTube frequently returns HTTP 429 to cloud/server-side fetchers.
+  // YouTube ingestion only needs metadata here, so do not fail the entire
+  // ingestion pipeline when the page itself rate-limits the server.
+  if (!res.ok && !(isYouTube && res.status === 429)) {
     throw new Error(`Server returned HTTP ${res.status} (${res.statusText}) when accessing ${targetUrl}`);
   }
 
@@ -115,8 +120,6 @@ export async function ingestUrl(rawUrl, documentId, userId) {
   }
 
   // Check if it's YouTube
-  const isYouTube = urlObj.hostname.includes("youtube.com") || urlObj.hostname.includes("youtu.be");
-  if (isYouTube) {
     console.log(`[URL Ingestion] Detected YouTube video: ${targetUrl}`);
     let ytTitle = "YouTube Video";
     let ytAuthor = "YouTube Creator";
@@ -134,7 +137,7 @@ export async function ingestUrl(rawUrl, documentId, userId) {
       console.warn("YouTube oEmbed fetch error:", e.message);
     }
 
-    const html = await res.text();
+    const html = res.ok ? await res.text() : "";
     const ch = cheerio.load(html);
     const metaDesc = ch('meta[name="description"]').attr("content") || 
                      ch('meta[property="og:description"]').attr("content") || "";
