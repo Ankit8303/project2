@@ -120,6 +120,7 @@ export async function ingestUrl(rawUrl, documentId, userId) {
   }
 
   // Check if it's YouTube
+  if (isYouTube) {
     console.log(`[URL Ingestion] Detected YouTube video: ${targetUrl}`);
     let ytTitle = "YouTube Video";
     let ytAuthor = "YouTube Creator";
@@ -139,7 +140,7 @@ export async function ingestUrl(rawUrl, documentId, userId) {
 
     const html = res.ok ? await res.text() : "";
     const ch = cheerio.load(html);
-    const metaDesc = ch('meta[name="description"]').attr("content") || 
+    const metaDesc = ch('meta[name="description"]').attr("content") ||
                      ch('meta[property="og:description"]').attr("content") || "";
 
     const structuredText = `# [YOUTUBE VIDEO] ${ytTitle}
