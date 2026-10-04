@@ -59,7 +59,7 @@ export default function ChatWindow({ token, activeDocId, onSelectMessage, onOpen
   const [currentSuggestions, setCurrentSuggestions] = useState(STARTER_PROMPTS);
 
   const messagesEndRef = useRef(null);
-  const API_URL = "http://localhost:5000";
+  const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
   // Handle injected initial prompts (e.g. from Compare Mode)
   useEffect(() => {
