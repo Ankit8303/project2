@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { 
   Send, Bot, User, MessageSquare, AlertCircle, 
   Download, Copy, Check, Volume2, VolumeX, Mic, MicOff, 
-  Sparkles, SlidersHorizontal, Languages, Plus, Eye, BookOpen, RotateCcw
+  Sparkles, SlidersHorizontal, Languages, Plus, Eye, BookOpen, RotateCcw,
+  AlignLeft, FileText, BarChart2, List
 } from "lucide-react";
 import axios from "axios";
 
@@ -32,10 +33,10 @@ const formatSuggestions = (questionsList) => {
 };
 
 const TONE_OPTIONS = [
-  { id: "balanced", label: "Balanced Tone" },
-  { id: "executive", label: "Executive Brief" },
-  { id: "detailed", label: "In-Depth Analytical" },
-  { id: "bullets", label: "Bullet Points Only" }
+  { id: "balanced",  label: "Balanced Tone",      icon: "⚖️" },
+  { id: "executive", label: "Executive Brief",     icon: "📋" },
+  { id: "detailed",  label: "In-Depth Analytical", icon: "🔬" },
+  { id: "bullets",   label: "Bullet Points Only",  icon: "🔵" }
 ];
 
 const LANGUAGE_OPTIONS = [
@@ -59,7 +60,23 @@ export default function ChatWindow({ token, activeDocId, onSelectMessage, onOpen
   const [currentSuggestions, setCurrentSuggestions] = useState(STARTER_PROMPTS);
 
   const messagesEndRef = useRef(null);
+  const toneWrapperRef = useRef(null);
+  const langWrapperRef = useRef(null);
   const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+
+  // Close dropdowns when clicking outside
+  useEffect(() => {
+    const handleOutsideClick = (e) => {
+      if (toneWrapperRef.current && !toneWrapperRef.current.contains(e.target)) {
+        setShowToneMenu(false);
+      }
+      if (langWrapperRef.current && !langWrapperRef.current.contains(e.target)) {
+        setShowLangMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, []);
 
   // Handle injected initial prompts (e.g. from Compare Mode)
   useEffect(() => {
@@ -532,18 +549,21 @@ export default function ChatWindow({ token, activeDocId, onSelectMessage, onOpen
           )}
 
           {/* Tone Selector */}
-          <div className="tone-selector-wrapper">
+          <div className="tone-selector-wrapper" ref={toneWrapperRef}>
             <button 
               type="button" 
               className={`chat-action-btn ${tone !== "balanced" ? "active" : ""}`}
               onClick={() => {
-                setShowToneMenu(!showToneMenu);
+                setShowToneMenu(prev => !prev);
                 setShowLangMenu(false);
               }}
               title="Change Answer Tone"
             >
               <SlidersHorizontal size={13} />
-              <span>{TONE_OPTIONS.find(t => t.id === tone)?.label}</span>
+              <span>
+                {TONE_OPTIONS.find(t => t.id === tone)?.icon}{" "}
+                {TONE_OPTIONS.find(t => t.id === tone)?.label}
+              </span>
             </button>
 
             {showToneMenu && (
@@ -558,7 +578,9 @@ export default function ChatWindow({ token, activeDocId, onSelectMessage, onOpen
                       setShowToneMenu(false);
                     }}
                   >
-                    {opt.label}
+                    <span className="tone-item-icon">{opt.icon}</span>
+                    <span>{opt.label}</span>
+                    {tone === opt.id && <span className="tone-check">✓</span>}
                   </button>
                 ))}
               </div>
@@ -566,12 +588,12 @@ export default function ChatWindow({ token, activeDocId, onSelectMessage, onOpen
           </div>
 
           {/* Language Selector */}
-          <div className="tone-selector-wrapper">
+          <div className="tone-selector-wrapper" ref={langWrapperRef}>
             <button 
               type="button" 
               className={`chat-action-btn ${language !== "English" ? "active" : ""}`}
               onClick={() => {
-                setShowLangMenu(!showLangMenu);
+                setShowLangMenu(prev => !prev);
                 setShowToneMenu(false);
               }}
               title="Answer Language"
@@ -592,7 +614,8 @@ export default function ChatWindow({ token, activeDocId, onSelectMessage, onOpen
                       setShowLangMenu(false);
                     }}
                   >
-                    {lang}
+                    <span>{lang}</span>
+                    {language === lang && <span className="tone-check">✓</span>}
                   </button>
                 ))}
               </div>
