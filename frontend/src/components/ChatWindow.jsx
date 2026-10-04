@@ -331,72 +331,93 @@ export default function ChatWindow({ token, activeDocId, onSelectMessage, onOpen
   };
 
   const handleSpeak = (text, id) => {
-    if (!('speechSynthesis' in window)) {
+    if (!("speechSynthesis" in window) || typeof window.SpeechSynthesisUtterance === "undefined") {
       alert("Text-to-speech is not supported in this browser.");
       return;
     }
 
-    if (speakingMsgId === id) {
-      window.speechSynthesis.cancel();
+    const synth = window.speechSynthesis;
+
+    if (speakingMsgId === id || synth.speaking || synth.pending) {
+      synth.cancel();
       setSpeakingMsgId(null);
-      return;
+      if (speakingMsgId === id) return;
     }
 
-    window.speechSynthesis.cancel();
-    setSpeakingMsgId(null);
-
-    // Clean markdown, links, and codeblocks for natural reading
-    const cleanText = text
+    const cleanText = String(text || "")
       .replace(/```[\s\S]*?```/g, "Code block omitted.")
       .replace(/`([^`]+)`/g, "$1")
       .replace(/<[^>]*>/g, "")
       .replace(/[*_#~>\[\]\(\)]/g, "")
-      .replace(/\n+/g, ". ")
+      .replace(/\s*\n+\s*/g, ". ")
+      .replace(/\s{2,}/g, " ")
       .trim();
 
     if (!cleanText) return;
 
-    window.speechSynthesis.resume();
-
-    const utterance = new SpeechSynthesisUtterance(cleanText);
-    utterance.rate = 1.0;
-    utterance.pitch = 1.0;
-
-    // Match voice to selected language if available
     const langPrefixMap = {
-      English: "en",
-      Spanish: "es",
-      French: "fr",
-      German: "de",
-      Hindi: "hi",
-      Japanese: "ja",
-      Chinese: "zh",
-      Arabic: "ar"
+      English: "en", Spanish: "es", French: "fr", German: "de",
+      Hindi: "hi", Japanese: "ja", Chinese: "zh", Arabic: "ar"
     };
     const prefix = langPrefixMap[language] || "en";
-    const voices = window.speechSynthesis.getVoices();
-    if (voices && voices.length > 0) {
-      const matched = voices.find(v => v.lang.toLowerCase().startsWith(prefix));
-      if (matched) utterance.voice = matched;
-    }
+    const voices = synth.getVoices();
+    const matchedVoice = voices.find(
+      (voice) => voice.lang && voice.lang.toLowerCase().startsWith(prefix)
+    );
 
-    utterance.onstart = () => {
-      setSpeakingMsgId(id);
+    const chunks = cleanText
+      .match(/[^.!?]+[.!?]+|[^.!?]+$/g)
+      ?.reduce((result, sentence) => {
+        const trimmed = sentence.trim();
+        if (!trimmed) return result;
+        const lastChunk = result[result.length - 1];
+        if (lastChunk && (lastChunk.length + trimmed.length + 1) <= 450) {
+          result[result.length - 1] = lastChunk + " " + trimmed;
+        } else {
+          result.push(trimmed);
+        }
+        return result;
+      }, []) || [cleanText];
+
+    setSpeakingMsgId(id);
+
+    const speakChunk = (index) => {
+      if (index >= chunks.length) {
+        setSpeakingMsgId(null);
+        return;
+      }
+
+      const utterance = new SpeechSynthesisUtterance(chunks[index]);
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      utterance.volume = 1.0;
+      if (matchedVoice) {
+        utterance.voice = matchedVoice;
+        utterance.lang = matchedVoice.lang;
+      } else {
+        utterance.lang = prefix === "en" ? "en-US" : prefix;
+      }
+
+      utterance.onstart = () => setSpeakingMsgId(id);
+      utterance.onend = () => {
+        if (index + 1 < chunks.length) {
+          window.setTimeout(() => speakChunk(index + 1), 20);
+        } else {
+          setSpeakingMsgId(null);
+        }
+      };
+      utterance.onerror = (event) => {
+        console.warn("Speech synthesis error:", event.error);
+        synth.cancel();
+        setSpeakingMsgId(null);
+      };
+
+      synth.speak(utterance);
     };
 
-    utterance.onend = () => {
-      setSpeakingMsgId(null);
-    };
-
-    utterance.onerror = (e) => {
-      console.warn("Speech synthesis error:", e);
-      setSpeakingMsgId(null);
-    };
-
-    // 50ms delay avoids browser voice-drop bug on rapid actions
-    setTimeout(() => {
-      window.speechSynthesis.speak(utterance);
-    }, 50);
+    synth.cancel();
+    synth.resume();
+    speakChunk(0);
   };
 
   const handleVoiceInput = () => {
