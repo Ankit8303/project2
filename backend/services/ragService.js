@@ -21,6 +21,13 @@ import {
 // structure: { [documentId]: { vectorStore, chunks, usePinecone, docMeta } }
 export const vectorStoreRegistry = {};
 
+// Pinecone is optional. Never call pinecone.Index() with an empty/undefined name.
+const getPineconeIndexName = () => (process.env.PINECONE_INDEX_NAME || "").trim();
+const isPineconeConfigured = () =>
+  process.env.USE_PINECONE === "true" &&
+  !!process.env.PINECONE_API_KEY &&
+  !!getPineconeIndexName();
+
 /**
  * Rehydrates a document's chunks and vector store from MongoDB if missing from RAM
  */
@@ -174,7 +181,7 @@ export async function processDocument(fileBuffer, documentId, filename = "", mim
   });
 
   let vectorStore;
-  let usePinecone = process.env.USE_PINECONE === "true" && !!process.env.PINECONE_API_KEY;
+  let usePinecone = isPineconeConfigured();
 
   if (usePinecone) {
     console.log(`[RAG Service] Indexing document ${documentId} on Pinecone Cloud...`);
@@ -182,7 +189,7 @@ export async function processDocument(fileBuffer, documentId, filename = "", mim
       const pinecone = new PineconeClient({
         apiKey: process.env.PINECONE_API_KEY
       });
-      const pineconeIndex = pinecone.Index(process.env.PINECONE_INDEX_NAME);
+      const pineconeIndex = pinecone.Index(getPineconeIndexName());
 
       const pineconeUploadPromise = PineconeStore.fromDocuments(chunks, embeddings, {
         pineconeIndex,
@@ -267,12 +274,12 @@ export async function processTextDocument(rawText, documentId, filename = "", fi
   });
 
   let vectorStore;
-  let usePinecone = process.env.USE_PINECONE === "true" && !!process.env.PINECONE_API_KEY;
+  let usePinecone = isPineconeConfigured();
 
   if (usePinecone) {
     try {
       const pinecone = new PineconeClient({ apiKey: process.env.PINECONE_API_KEY });
-      const pineconeIndex = pinecone.Index(process.env.PINECONE_INDEX_NAME);
+      const pineconeIndex = pinecone.Index(getPineconeIndexName());
       const pineconeUploadPromise = PineconeStore.fromDocuments(chunks, embeddings, {
         pineconeIndex,
         namespace: documentId
@@ -297,8 +304,7 @@ export async function processTextDocument(rawText, documentId, filename = "", fi
     docMeta: {
       fileType,
       mimeType,
-      mediaMetadata
-    }
+      mediaMetadata    }
   };
 
   return {
@@ -385,7 +391,7 @@ export async function queryDoc(documentId, question, chatHistory) {
   });
 
   let vectorStore;
-  const usePinecone = process.env.USE_PINECONE === "true" && !!process.env.PINECONE_API_KEY;
+  const usePinecone = isPineconeConfigured();
   let registryEntry = vectorStoreRegistry[documentId];
 
   if (registryEntry && registryEntry.vectorStore) {
@@ -396,7 +402,7 @@ export async function queryDoc(documentId, question, chatHistory) {
       const pinecone = new PineconeClient({
         apiKey: process.env.PINECONE_API_KEY
       });
-      const pineconeIndex = pinecone.Index(process.env.PINECONE_INDEX_NAME);
+      const pineconeIndex = pinecone.Index(getPineconeIndexName());
       
       const embeddings = new GoogleGenerativeAIEmbeddings({
         apiKey: process.env.GEMINI_API_KEY,
@@ -597,8 +603,7 @@ JSON output:`;
   let evaluation = { score: 100, reasoning: "Evaluation bypass." };
   try {
     console.log("[RAG Service] Auditing answer faithfulness...");
-    const timeoutPromiseEval = new Promise((_, reject) => setTimeout(() => reject(new Error("Eval Timeout")), 8000));
-    
+    const timeoutPromiseEval = new Promise((_, reject) => setTimeout(() => reject(new Error("Eval Timeout")), 8000));    
     try {
       const evalResponse = await Promise.race([evalModel.invoke(evalPrompt), timeoutPromiseEval]);
       const cleanJson = evalResponse.content.replace(/```json/g, "").replace(/```/g, "").trim();
@@ -720,10 +725,10 @@ export async function removeDocumentFromRegistry(documentId) {
     delete vectorStoreRegistry[documentId];
     console.log(`[RAG Service] Cleared memory vector store for document ${documentId}`);
   }
-  if (process.env.USE_PINECONE === "true" && process.env.PINECONE_API_KEY && process.env.PINECONE_INDEX_NAME) {
+  if (isPineconeConfigured()) {
     try {
       const pinecone = new PineconeClient({ apiKey: process.env.PINECONE_API_KEY });
-      const index = pinecone.Index(process.env.PINECONE_INDEX_NAME);
+      const index = pinecone.Index(getPineconeIndexName());
       await index.namespace(documentId).deleteAll();
       console.log(`[RAG Service] Deleted Pinecone namespace for document ${documentId}`);
     } catch (e) {
@@ -897,8 +902,7 @@ export async function getDocumentAnalytics(documentId) {
     readingTimeMin,
     readabilityScore: fleschScore,
     readabilityGrade,
-    keyTopics
-  };
+    keyTopics  };
 }
 
 /**
