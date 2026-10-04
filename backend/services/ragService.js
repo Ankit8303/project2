@@ -688,24 +688,53 @@ Assistant Answer:`;
       answer = finalResponse.content;
       console.log("[RAG Service] Answer generated successfully by LangChain Groq.");
     } catch (lcError) {
-      console.warn(`[RAG Service] LangChain Groq failed or timed out: ${lcError.message}. Falling back to Groq direct fetch!`);
-      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${groqApiKey}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model: groqModelName,
-          messages: [{ role: "user", content: ragSystemPrompt }],
-          temperature: 0.1
-        }),
-        signal: AbortSignal.timeout(10000)
-      });
-      if (!res.ok) throw new Error(`Groq direct fetch failed: ${await res.text()}`);
-      const data = await res.json();
-      answer = data.choices[0].message.content;
-      console.log("[RAG Service] Answer generated successfully by Fallback Fetch (Groq).");
+      console.warn(`[RAG Service] LangChain Groq failed or timed out: ${lcError.message}. Trying Groq direct fetch...`);
+      let groqSuccess = false;
+      try {
+        const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${groqApiKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: groqModelName,
+            messages: [{ role: "user", content: ragSystemPrompt }],
+            temperature: 0.1
+          }),
+          signal: AbortSignal.timeout(10000)
+        });
+        if (res.ok) {
+          const data = await res.json();
+          answer = data.choices[0].message.content;
+          groqSuccess = true;
+          console.log("[RAG Service] Answer generated successfully by Fallback Fetch (Groq).");
+        }
+      } catch (fErr) {
+        console.warn("[RAG Service] Groq direct fetch error:", fErr.message);
+      }
+
+      // If Groq was not successful, fallback to Gemini 2.5 Flash
+      if (!groqSuccess) {
+        const geminiApiKey = process.env.GEMINI_API_KEY;
+        if (!geminiApiKey) throw new Error("Both Groq and Gemini API keys are unavailable.");
+        console.log("[RAG Service] Generating answer using Gemini 2.5 Flash fallback...");
+        const gRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: ragSystemPrompt }] }]
+          }),
+          signal: AbortSignal.timeout(20000)
+        });
+        if (!gRes.ok) {
+          const gErr = await gRes.text();
+          throw new Error(`Gemini generation failed: ${gErr}`);
+        }
+        const gData = await gRes.json();
+        answer = gData.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        console.log("[RAG Service] Answer generated successfully by Gemini 2.5 Flash.");
+      }
     }
   } catch (err) {
     console.log(`[RAG Service] GENERATION ERROR: ${err.message}`);

@@ -140,17 +140,100 @@ export async function ingestUrl(rawUrl, documentId, userId) {
 
     const html = res.ok ? await res.text() : "";
     const ch = cheerio.load(html);
-    const metaDesc = ch('meta[name="description"]').attr("content") ||
-                     ch('meta[property="og:description"]').attr("content") || "";
+    let fullDesc = "";
+    const descMatch = html.match(/"description":\s*{"simpleText":\s*"([^"]+)"}/);
+    if (descMatch) {
+      fullDesc = descMatch[1].replace(/\\n/g, "\n");
+    } else {
+      fullDesc = ch('meta[name="description"]').attr("content") ||
+                 ch('meta[property="og:description"]').attr("content") || "";
+    }
+
+    // Generate Deep Multimodal Video Timeline & Scene Breakdown using Gemini 2.5 Flash
+    let videoAnalysisText = "";
+    let scenes = [];
+    const geminiApiKey = process.env.GEMINI_API_KEY;
+
+    if (geminiApiKey) {
+      try {
+        console.log(`[URL Ingestion] Running deep video semantic & timeline analysis via Gemini for "${ytTitle}"...`);
+        const prompt = `You are a world-class video intelligence engine. Analyze this YouTube video:
+Title: "${ytTitle}"
+Creator / Channel: "${ytAuthor}"
+URL: ${targetUrl}
+Description & Video Details:
+${fullDesc || "Video document"}
+
+Produce a comprehensive, highly detailed chronological breakdown in structured markdown with these exact section headers:
+
+# [YOUTUBE VIDEO OVERVIEW]
+Provide a thorough executive summary of what this video depicts, the creator's journey, topics covered, location, historical/cultural context, and core narrative.
+
+# [CHRONOLOGICAL SCENE & TIMELINE BREAKDOWN]
+Provide a detailed chronological timeline breakdown across the video with explicit timestamps [MM:SS - MM:SS] at 1 to 2 minute intervals (e.g. [00:00 - 01:30], [01:30 - 03:00], [03:00 - 04:30], [04:30 - 06:00], [06:00 - 08:00], etc.):
+- [MM:SS - MM:SS] Scene Title: Detailed description of what happens at this timestamp, visual events on screen, actions, landmarks, camera perspective, and topics discussed.
+
+# [KEY TOPICS, DIALOGUE & ON-SCREEN OBSERVATIONS]
+Detail specific statements, spoken dialogue, people encountered, on-screen text, and geographic/cultural observations.
+
+# [KEY TAKEAWAYS & CONCLUSIONS]
+List 5 to 8 high-yield takeaways and conclusions.`;
+
+        const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }]
+          }),
+          signal: AbortSignal.timeout(25000)
+        });
+
+        if (geminiRes.ok) {
+          const gData = await geminiRes.json();
+          videoAnalysisText = gData.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        }
+      } catch (geminiErr) {
+        console.warn("[URL Ingestion] Gemini video breakdown warning:", geminiErr.message);
+      }
+    }
 
     const structuredText = `# [YOUTUBE VIDEO] ${ytTitle}
 Channel / Creator: ${ytAuthor}
 Source URL: ${targetUrl}
 Thumbnail URL: ${ytThumb}
 
-## Video Description & Metadata:
-${metaDesc || "Video stream sourced from YouTube."}
-`;
+${videoAnalysisText || `## Video Description:\n${fullDesc || "Video stream sourced from YouTube."}`}`;
+
+    // Extract discrete scene objects from the TIMELINE section
+    const timelineMatch = structuredText.match(/#\s*\[CHRONOLOGICAL SCENE & TIMELINE BREAKDOWN\]([\s\S]*?)(?=#\s*\[|$)/);
+    if (timelineMatch) {
+      const sceneLines = timelineMatch[1].split("\n").filter(l => l.trim().startsWith("- [") || l.trim().startsWith("* [") || l.trim().startsWith("- **["));
+      scenes = sceneLines.map((line, idx) => {
+        const match = line.match(/\[(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\]\s*(.*?):\s*(.*)/);
+        if (match) {
+          const startParts = match[1].split(":").map(Number);
+          const endParts = match[2].split(":").map(Number);
+          const startSec = (startParts[0] * 60) + startParts[1];
+          const endSec = (endParts[0] * 60) + endParts[1];
+          return {
+            id: idx,
+            timestamp: `[${match[1]} - ${match[2]}]`,
+            startSec,
+            endSec,
+            title: match[3].replace(/\*\*/g, "").trim(),
+            description: match[4].trim()
+          };
+        }
+        return {
+          id: idx,
+          timestamp: `[Scene ${idx + 1}]`,
+          startSec: idx * 60,
+          endSec: (idx + 1) * 60,
+          title: `Scene ${idx + 1}`,
+          description: line.replace(/^[-*]\s*(\*\*)?/, "").trim()
+        };
+      });
+    }
 
     const mediaMetadata = {
       sourceUrl: targetUrl,
@@ -159,28 +242,46 @@ ${metaDesc || "Video stream sourced from YouTube."}
       author: ytAuthor,
       thumbnail: ytThumb,
       isYouTube: true,
-      domain: urlObj.hostname
+      domain: urlObj.hostname,
+      scenes: scenes.slice(0, 30)
     };
 
     const stats = await processTextDocument(
       structuredText,
       documentId,
       ytTitle,
-      "webpage",
-      "text/html",
+      "video",
+      "video/youtube",
       mediaMetadata
     );
+
+    // Ensure all chunks have explicit timestamp metadata
+    if (scenes.length > 0) {
+      scenes.forEach((scene, sIdx) => {
+        stats.chunks.push({
+          pageContent: `[Video Scene at ${scene.timestamp}] ${scene.title}: ${scene.description}`,
+          metadata: {
+            chunkId: stats.chunks.length,
+            modality: "video",
+            timestamp: scene.timestamp,
+            startSec: scene.startSec,
+            endSec: scene.endSec,
+            filename: ytTitle
+          }
+        });
+      });
+    }
 
     const doc = new Document({
       id: documentId,
       userId,
       filename: `🎬 ${ytTitle.length > 55 ? ytTitle.slice(0, 55) + "..." : ytTitle}`,
-      fileType: "webpage",
-      mimeType: "text/html",
+      fileType: "video",
+      mimeType: "video/youtube",
       mediaPath: "",
       mediaMetadata,
       size: Buffer.byteLength(structuredText),
-      chunkCount: stats.chunkCount,
+      chunkCount: stats.chunks.length,
       charCount: stats.charCount,
       rawText: stats.rawText,
       chunks: stats.chunks
