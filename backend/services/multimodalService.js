@@ -438,13 +438,26 @@ List 5 to 8 essential takeaways, decisions, instructions, or conclusions.`;
   const splitDocs = await splitter.createDocuments([rawText]);
 
   const chunks = splitDocs.map((c, i) => {
-    // Check if chunk contains a timestamp
-    const tsMatch = c.pageContent.match(/\[(\d{1,2}:\d{2})/);
-    const timestamp = tsMatch ? tsMatch[1] : null;
+    // Check if chunk contains a timestamp range or single marker
+    const tsRangeMatch = c.pageContent.match(/\[(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\]/);
     let startSec = null;
-    if (timestamp) {
-      const parts = timestamp.split(":").map(Number);
-      startSec = (parts[0] * 60) + parts[1];
+    let endSec = null;
+    let timestamp = null;
+
+    if (tsRangeMatch) {
+      const p1 = tsRangeMatch[1].split(":").map(Number);
+      const p2 = tsRangeMatch[2].split(":").map(Number);
+      startSec = (p1[0] * 60) + p1[1];
+      endSec = (p2[0] * 60) + p2[1];
+      timestamp = `[${tsRangeMatch[1]} - ${tsRangeMatch[2]}]`;
+    } else {
+      const singleMatch = c.pageContent.match(/\[(\d{1,2}:\d{2})/);
+      if (singleMatch) {
+        const p = singleMatch[1].split(":").map(Number);
+        startSec = (p[0] * 60) + p[1];
+        endSec = startSec + 30;
+        timestamp = `[${singleMatch[1]}]`;
+      }
     }
 
     return {
@@ -454,10 +467,28 @@ List 5 to 8 essential takeaways, decisions, instructions, or conclusions.`;
         modality: "video",
         timestamp,
         startSec,
+        endSec,
         filename
       }
     };
   });
+
+  // Also include discrete scene milestone chunks if available
+  if (scenes && scenes.length > 0) {
+    scenes.forEach((scene, sIdx) => {
+      chunks.push({
+        pageContent: `[Video Scene ${sIdx + 1} at ${scene.timestamp}] ${scene.title}: ${scene.description}`,
+        metadata: {
+          chunkId: chunks.length,
+          modality: "video",
+          timestamp: scene.timestamp,
+          startSec: scene.startSec,
+          endSec: scene.startSec + 30,
+          filename
+        }
+      });
+    });
+  }
 
   return {
     rawText,

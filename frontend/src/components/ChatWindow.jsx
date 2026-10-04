@@ -43,7 +43,7 @@ const LANGUAGE_OPTIONS = [
   "English", "Spanish", "French", "German", "Hindi", "Japanese", "Chinese", "Arabic"
 ];
 
-export default function ChatWindow({ token, activeDocId, onSelectMessage, onOpenStudy, onOpenPreview, initialPrompt, onClearInitialPrompt }) {
+export default function ChatWindow({ token, activeDocId, comparisonDocIds, onSelectMessage, onOpenStudy, onOpenPreview, initialPrompt, onClearInitialPrompt }) {
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState("");
   const [loading, setLoading] = useState(false);
@@ -245,7 +245,8 @@ export default function ChatWindow({ token, activeDocId, onSelectMessage, onOpen
         {
           documentId: activeDocId,
           question: enrichedQuestion,
-          chatHistory: chatHistoryForRag
+          chatHistory: chatHistoryForRag,
+          compareDocIds: comparisonDocIds || null
         },
         {
           headers: {

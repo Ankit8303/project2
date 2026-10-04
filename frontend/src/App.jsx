@@ -111,6 +111,7 @@ function AuthenticatedDashboard() {
   const [theme, setTheme] = useState(() => localStorage.getItem("paperpulse_theme") || "amethyst");
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const [comparisonPrompt, setComparisonPrompt] = useState(null);
+  const [comparisonDocIds, setComparisonDocIds] = useState(null);
 
   // Apply theme to root html element
   useEffect(() => {
@@ -143,6 +144,7 @@ function AuthenticatedDashboard() {
 
   const handleCompareDocs = (doc1, doc2) => {
     setActiveDocId(doc1.id);
+    setComparisonDocIds([doc1.id, doc2.id]);
     setComparisonPrompt(`Please compare and contrast "${doc1.filename}" and "${doc2.filename}". Highlight key differences, shared themes, and unique takeaways.`);
   };
 
@@ -239,11 +241,14 @@ function AuthenticatedDashboard() {
           <ChatWindow 
             token={token} 
             activeDocId={activeDocId} 
+            comparisonDocIds={comparisonDocIds}
             onSelectMessage={setSelectedMessage}
             onOpenPreview={(id, opts) => { setPreviewDocId(id); setPreviewOptions(opts || {}); }}
             onOpenStudy={(id) => setStudyDocId(id)}
             initialPrompt={comparisonPrompt}
-            onClearInitialPrompt={() => setComparisonPrompt(null)}
+            onClearInitialPrompt={() => {
+              setComparisonPrompt(null);
+            }}
           />
 
           {/* Column 3: RAG Execution Auditor & Analytics */}

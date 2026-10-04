@@ -9,17 +9,17 @@ const router = express.Router();
 // Queries the active document, generates a response, and saves the conversation history.
 router.post("/query", authMiddleware, async (req, res) => {
   try {
-    const { documentId, question, chatHistory } = req.body;
+    const { documentId, question, chatHistory, compareDocIds } = req.body;
     const userId = req.user.id;
 
     if (!documentId || !question) {
       return res.status(400).json({ error: "Missing documentId or query question." });
     }
 
-    console.log(`[Query] User ${userId} querying document ${documentId}: "${question}"`);
+    console.log(`[Query] User ${userId} querying document ${documentId}: "${question}" (compare: ${compareDocIds ? compareDocIds.join(",") : "none"})`);
 
-    // Run RAG pipeline
-    const ragResult = await queryDoc(documentId, question, chatHistory);
+    // Run RAG pipeline with temporal and cross-comparison support
+    const ragResult = await queryDoc(documentId, question, chatHistory, compareDocIds, userId);
 
     // Save user chat logs to MongoDB
     const chatLog = new Chat({

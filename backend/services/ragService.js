@@ -371,10 +371,44 @@ function performHybridSearch(documentId, query, vectorStoreResults, limit = 4) {
 }
 
 /**
- * RAG Query Orchestrator
- * Triggers routing, retrieval, hybrid fusion, prompt formatting, QA response, and self-evaluation.
+ * Extracts explicit or natural language timestamps from query
+ * e.g., "02:15", "2:15", "at 5 minutes", "around 90 seconds", "between 01:00 and 02:00"
  */
-export async function queryDoc(documentId, question, chatHistory) {
+export function parseQueryTimestamp(question) {
+  if (!question || typeof question !== "string") return null;
+
+  // 1. Explicit MM:SS or HH:MM:SS (e.g. 02:15, 2:15, 1:04:20, [02:15], 02:15 - 02:45)
+  const timeRegex = /(?:(\d{1,2}):)?(\d{1,2}):(\d{2})/;
+  const match = question.match(timeRegex);
+  if (match) {
+    const hrs = match[1] ? parseInt(match[1], 10) : 0;
+    const mins = parseInt(match[2], 10);
+    const secs = parseInt(match[3], 10);
+    const totalSec = (hrs * 3600) + (mins * 60) + secs;
+    const formatted = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+    return { targetSec: totalSec, formatted, raw: match[0] };
+  }
+
+  // 2. Natural language phrases (e.g. "at 5 minutes", "at 5 mins", "around 90 seconds", "at 3 min mark")
+  const natMatch = question.match(/(\d+(?:\.\d+)?)\s*(?:minutes?|mins?|seconds?|secs?|min|sec)\b/i);
+  if (natMatch) {
+    const val = parseFloat(natMatch[1]);
+    const isMin = /min/i.test(natMatch[0]);
+    const totalSec = Math.round(isMin ? val * 60 : val);
+    const mins = Math.floor(totalSec / 60);
+    const secs = totalSec % 60;
+    const formatted = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+    return { targetSec: totalSec, formatted, raw: natMatch[0] };
+  }
+
+  return null;
+}
+
+/**
+ * RAG Query Orchestrator
+ * Triggers routing, retrieval, temporal filtering, cross-document comparison, QA response, and self-evaluation.
+ */
+export async function queryDoc(documentId, question, chatHistory, compareDocIds = null, userId = null) {
   const groqApiKey = process.env.GROQ_API_KEY;
   if (!groqApiKey) {
     throw new Error("Master Groq API Key is missing on the server. Please check .env config.");
@@ -494,9 +528,90 @@ Router Classification:`;
     };
   }
 
+  // --- Check Temporal Timestamp in Question (for Videos / Audio) ---
+  const timeQuery = parseQueryTimestamp(question);
+  if (timeQuery) {
+    console.log(`[RAG Service] Detected temporal timestamp query: target=${timeQuery.formatted} (${timeQuery.targetSec}s)`);
+  }
+
+  // --- Check Multi-Document Comparison Intent ---
+  const isComparisonQuery = (Array.isArray(compareDocIds) && compareDocIds.length > 1) ||
+    /\b(compare|contrast|differences?|similarit(y|ies)|versus|vs\.?|across (both|all)|between (the )?documents|between (the )?files|across all uploads)\b/i.test(question);
+
   // --- Step 2: Context Retrieval & Hybrid Search ---
   let contextDocs = [];
-  if (intent === "SUMMARY") {
+  let comparisonDocHeaders = [];
+
+  if (isComparisonQuery) {
+    console.log("[RAG Service] Executing Multi-Document Comparison Retrieval...");
+    let targetDocIds = Array.isArray(compareDocIds) && compareDocIds.length > 0 ? compareDocIds : [documentId];
+
+    // If only 1 doc is passed but user explicitly asks to compare library uploads, retrieve user's recent docs
+    if (targetDocIds.length === 1 && userId) {
+      try {
+        const userDocs = await Document.find({ userId }).sort({ uploadedAt: -1 }).limit(4);
+        if (userDocs && userDocs.length > 1) {
+          targetDocIds = userDocs.map(d => d.id);
+        }
+      } catch (err) {
+        console.warn("[RAG Service] Failed to lookup user documents for auto-compare:", err.message);
+      }
+    }
+
+    // Retrieve relevant chunks from each target document
+    for (const dId of targetDocIds) {
+      try {
+        const entry = await getOrRehydrateDocument(dId, false);
+        const docRecord = await Document.findOne({ id: dId });
+        const docName = docRecord?.filename || `Document ${dId}`;
+        const docCategory = docRecord?.fileType || "document";
+
+        comparisonDocHeaders.push({ id: dId, filename: docName, fileType: docCategory });
+
+        // Retrieve top chunks from this document
+        let docChunks = [];
+        if (entry.vectorStore) {
+          const raw = await entry.vectorStore.similaritySearch(question, 4);
+          docChunks = raw;
+        } else if (entry.chunks && entry.chunks.length > 0) {
+          docChunks = entry.chunks.slice(0, 4);
+        }
+
+        docChunks.forEach((c, idx) => {
+          contextDocs.push({
+            pageContent: `[Document: "${docName}" (${docCategory}) | Chunk ${idx + 1}]\n${c.pageContent}`,
+            metadata: { ...c.metadata, documentId: dId, documentName: docName }
+          });
+        });
+      } catch (err) {
+        console.warn(`[RAG Service] Could not rehydrate comparison doc ${dId}:`, err.message);
+      }
+    }
+  } else if (timeQuery && registryEntry?.chunks && registryEntry.chunks.length > 0) {
+    // Exact & Proximity Temporal Chunk Search
+    console.log(`[RAG Service] Running temporal range filter for target timestamp ${timeQuery.formatted}...`);
+    
+    // Find chunks that match or surround the target timestamp
+    const temporalChunks = registryEntry.chunks.filter(c => {
+      const s = c.metadata?.startSec;
+      const e = c.metadata?.endSec || (s !== null && s !== undefined ? s + 35 : null);
+      if (s !== null && s !== undefined) {
+        return (timeQuery.targetSec >= s - 15 && timeQuery.targetSec <= (e || s) + 20) ||
+               Math.abs(s - timeQuery.targetSec) <= 45;
+      }
+      // Fallback text check for timestamp in chunk text
+      return c.pageContent.includes(timeQuery.formatted) || c.pageContent.includes(timeQuery.raw);
+    });
+
+    if (temporalChunks.length > 0) {
+      console.log(`[RAG Service] Found ${temporalChunks.length} matching temporal scene chunks!`);
+      contextDocs = temporalChunks.slice(0, 5);
+    } else {
+      // If direct filter didn't catch, fallback to vector similarity
+      const rawMatches = await vectorStore.similaritySearch(question, 6);
+      contextDocs = performHybridSearch(documentId, question, rawMatches, 4);
+    }
+  } else if (intent === "SUMMARY") {
     if (registryEntry) {
       contextDocs = registryEntry.chunks.slice(0, 6);
     } else {
@@ -519,6 +634,26 @@ Router Classification:`;
     .map(msg => `${msg.sender === "user" ? "Human" : "Assistant"}: ${msg.text}`)
     .join("\n");
 
+  // Custom directive depending on query intent
+  let specificDirective = "";
+  if (timeQuery) {
+    specificDirective = `
+TEMPORAL TIMESTAMP INSTRUCTION:
+- The user is specifically inquiring about timestamp [${timeQuery.formatted}] (around ${timeQuery.targetSec} seconds into the video/audio).
+- Detail what is occurring visually on screen (actions, slides, diagrams, code, UI, or text) AND what is spoken in the dialogue at this timestamp.
+- Always include the interactive timestamp citation [${timeQuery.formatted}] in your answer so the user can click to jump directly to this moment in the media player.`;
+  } else if (isComparisonQuery) {
+    specificDirective = `
+CROSS-DOCUMENT COMPARISON INSTRUCTION:
+- The user is asking to compare multiple uploaded files/documents.
+- Provide a structured comparative analysis formatted with these sections:
+  1. 📋 **Executive Comparison Summary**: Core similarities and contrasts at a glance.
+  2. 🔍 **Key Differences & Divergent Data Points**: Direct comparison of conflicting or unique findings in each document.
+  3. 🤝 **Shared Themes & Synergies**: What principles, metrics, or points both files agree on.
+  4. 📊 **Comparison Summary Table**: A markdown table comparing key dimensions across the documents.
+  5. 🎯 **Conclusion / Key Takeaway**.`;
+  }
+
   // --- Step 3: RAG Response Generation ---
   const ragSystemPrompt = `
 You are PaperPulse AI, an advanced universal multimodal intelligence platform. Your goal is to answer the user's question accurately using ONLY the provided document and media context.
@@ -531,6 +666,7 @@ CONSTRAINTS:
    - For audio or video context with timestamps, ALWAYS cite the exact timestamp marker (e.g. [01:23] or [04:15]) in your response so the user can click it to jump to that moment in the media player.
    - For images, infographics, and diagrams, explicitly describe the visual elements, detected OCR text, and chart trendlines.
    - For spreadsheets and datasets, reference the column names, sample rows, and computed statistics.
+${specificDirective}
 
 Context:
 ${contextText}
