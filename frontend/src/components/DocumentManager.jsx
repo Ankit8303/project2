@@ -27,7 +27,7 @@ export default function DocumentManager({
   const [urlInput, setUrlInput] = useState("");
   const fileInputRef = useRef(null);
 
-  const API_URL = "http://localhost:5000";
+  const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
   // Fetch documents list on mount
   useEffect(() => {
