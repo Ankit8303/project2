@@ -33,7 +33,7 @@ export default function DocumentPreviewModal({
   const [page, setPage] = useState(1);
   const rowsPerPage = 15;
 
-  const API_URL = "http://localhost:5000";
+  const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
   const mediaUrl = `${API_URL}/api/documents/${documentId}/media?token=${token}`;
 
   useEffect(() => {
