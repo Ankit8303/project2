@@ -12,7 +12,7 @@ export default function SourceInspector({ selectedMessage, activeDocId, token, o
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
   const [copiedChunkId, setCopiedChunkId] = useState(null);
 
-  const API_URL = "http://localhost:5000";
+  const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
   useEffect(() => {
     if (activeDocId && activeTab === "analytics") {
