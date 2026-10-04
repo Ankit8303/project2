@@ -424,63 +424,155 @@ export default function DocumentPreviewModal({
               )}
 
               {/* VIDEO VIEW */}
-              {fileType === "video" && (
-                <div className="video-intelligence-view">
-                  <div className="video-player-container">
-                    <video 
-                      ref={videoRef}
-                      src={mediaUrl}
-                      controls
-                      className="preview-video-element"
-                      onTimeUpdate={() => {
-                        if (videoRef.current) setCurrentTime(videoRef.current.currentTime);
-                      }}
-                    />
-                  </div>
+              {fileType === "video" && (() => {
+                const ytUrl = mediaMetadata.sourceUrl || mediaMetadata.url || data?.filename || "";
+                const ytMatch = ytUrl.match(/(?:v=|\/embed\/|youtu\.be\/|\/v\/)([^&?#/]+)/);
+                const ytVideoId = ytMatch ? ytMatch[1] : null;
 
-                  <div className="video-details-container">
-                    {/* Scene Breakdown Timeline */}
-                    <div className="insight-card">
-                      <div className="insight-card-header">
-                        <Video size={16} className="icon-accent" />
-                        <h4>Chronological Scene Timeline (Click scene to seek video)</h4>
-                      </div>
-                      <div className="video-scenes-grid">
-                        {(mediaMetadata.scenes || []).map((scene) => (
-                          <div 
-                            key={scene.id} 
-                            className="video-scene-card"
-                            onClick={() => seekTo(scene.startSec)}
-                          >
-                            <div className="scene-card-top">
-                              <span className="scene-time-pill"><Play size={10} /> {scene.timestamp}</span>
-                              <strong className="scene-title">{scene.title}</strong>
-                            </div>
-                            <p className="scene-desc">{scene.description}</p>
-                          </div>
-                        ))}
-                      </div>
+                const rawScenes = (mediaMetadata.scenes && mediaMetadata.scenes.length > 0)
+                  ? mediaMetadata.scenes
+                  : chunks
+                      .filter(c => c.timestamp || (c.text && c.text.includes("[") && c.text.includes("]")))
+                      .map((c, idx) => {
+                        const match = c.text.match(/\[(\d{1,2}:\d{2})(?:\s*-\s*(\d{1,2}:\d{2}))?\]\s*(?:(?:\[.*?\]|\*\*.*?\*\*)\s*)?(.*?):\s*([\s\S]*)/);
+                        if (match) {
+                          const p1 = match[1].split(":").map(Number);
+                          const sSec = (p1[0] * 60) + p1[1];
+                          return {
+                            id: idx,
+                            timestamp: match[2] ? `[${match[1]} - ${match[2]}]` : `[${match[1]}]`,
+                            startSec: c.startSec ?? sSec,
+                            title: match[3].replace(/\*\*/g, "").replace(/\[.*?\]/, "").trim() || `Scene ${idx + 1}`,
+                            description: match[4].replace(/\n/g, " ").trim()
+                          };
+                        }
+                        return {
+                          id: idx,
+                          timestamp: c.timestamp || `[Scene ${idx + 1}]`,
+                          startSec: c.startSec ?? (idx * 30),
+                          title: `Scene Milestone ${idx + 1}`,
+                          description: c.text.slice(0, 160)
+                        };
+                      });
+
+                const filteredScenes = rawScenes.filter(s =>
+                  !search ||
+                  s.title.toLowerCase().includes(search.toLowerCase()) ||
+                  s.description.toLowerCase().includes(search.toLowerCase()) ||
+                  s.timestamp.toLowerCase().includes(search.toLowerCase())
+                );
+
+                const handleSeekVideo = (sec) => {
+                  setCurrentTime(sec);
+                  seekTo(sec);
+                };
+
+                return (
+                  <div className="video-intelligence-view">
+                    {/* Video Player Display */}
+                    <div className="video-player-container">
+                      {ytVideoId ? (
+                        <div className="youtube-player-frame-wrapper">
+                          <iframe
+                            key={`yt-${currentTime}`}
+                            src={`https://www.youtube-nocookie.com/embed/${ytVideoId}?enablejsapi=1&autoplay=${currentTime > 0 ? 1 : 0}&start=${Math.floor(currentTime)}`}
+                            title={data?.filename || "YouTube Video"}
+                            className="preview-video-element youtube-iframe-element"
+                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                            allowFullScreen
+                          />
+                        </div>
+                      ) : (
+                        <video 
+                          ref={videoRef}
+                          src={mediaUrl}
+                          controls
+                          className="preview-video-element"
+                          onTimeUpdate={() => {
+                            if (videoRef.current) setCurrentTime(videoRef.current.currentTime);
+                          }}
+                        />
+                      )}
                     </div>
 
-                    {/* Video Overview & Takeaways */}
-                    {mediaMetadata.videoOverview && (
-                      <div className="insight-card">
+                    {/* Timeline & Analysis Insights Grid */}
+                    <div className="video-details-container">
+                      {/* Chronological Scene Timeline */}
+                      <div className="insight-card video-timeline-card">
                         <div className="insight-card-header">
-                          <Sparkles size={16} className="icon-accent" />
-                          <h4>Video Overview & Highlights</h4>
+                          <div className="header-left-title">
+                            <Video size={16} className="icon-accent" />
+                            <h4>Chronological Scene Timeline</h4>
+                            <span className="scene-count-badge">{filteredScenes.length} scenes</span>
+                          </div>
+
+                          {ytVideoId && (
+                            <a 
+                              href={`https://www.youtube.com/watch?v=${ytVideoId}`}
+                              target="_blank" 
+                              rel="noreferrer" 
+                              className="btn-external-link"
+                              title="Open on YouTube"
+                            >
+                              <span>YouTube</span>
+                              <ExternalLink size={12} />
+                            </a>
+                          )}
                         </div>
-                        <p className="insight-card-body">{mediaMetadata.videoOverview}</p>
-                        {mediaMetadata.takeaways && (
-                          <div className="video-takeaways-sub">
-                            <h5>Key Lessons & Takeaways</h5>
-                            <div className="markdown-styled">{mediaMetadata.takeaways}</div>
+
+                        {filteredScenes.length === 0 ? (
+                          <div className="empty-scenes-prompt">
+                            <Clock size={24} className="icon-muted" />
+                            <p>No timestamped scenes match your search query.</p>
+                          </div>
+                        ) : (
+                          <div className="video-scenes-grid">
+                            {filteredScenes.map((scene) => {
+                              const isActive = currentTime >= scene.startSec && currentTime <= (scene.endSec || (scene.startSec + 45));
+                              return (
+                                <div 
+                                  key={scene.id} 
+                                  className={`video-scene-card ${isActive ? "active-scene" : ""}`}
+                                  onClick={() => handleSeekVideo(scene.startSec)}
+                                  title={`Click to jump to ${scene.timestamp}`}
+                                >
+                                  <div className="scene-card-top">
+                                    <span className="scene-time-pill">
+                                      <Play size={10} className="icon-play-pill" /> 
+                                      {scene.timestamp}
+                                    </span>
+                                    <strong className="scene-title">{scene.title}</strong>
+                                  </div>
+                                  <p className="scene-desc">{scene.description}</p>
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                       </div>
-                    )}
+
+                      {/* Video Overview & Highlights */}
+                      {(mediaMetadata.videoOverview || mediaMetadata.takeaways) && (
+                        <div className="insight-card video-overview-card">
+                          <div className="insight-card-header">
+                            <Sparkles size={16} className="icon-accent" />
+                            <h4>AI Video Overview & Takeaways</h4>
+                          </div>
+                          {mediaMetadata.videoOverview && (
+                            <p className="insight-card-body">{mediaMetadata.videoOverview}</p>
+                          )}
+                          {mediaMetadata.takeaways && (
+                            <div className="video-takeaways-sub">
+                              <h5>Key Takeaways & Findings</h5>
+                              <div className="markdown-styled">{mediaMetadata.takeaways}</div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* DATA / CSV VIEW */}
               {fileType === "data" && (
