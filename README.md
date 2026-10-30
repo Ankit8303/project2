@@ -171,14 +171,7 @@
 
 ---
 
-## 🚀 Getting Started
 
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/kanav19jain/Documind-AI.git
-cd Documind-AI
-```
 
 ### 2. Backend
 
