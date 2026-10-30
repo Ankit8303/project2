@@ -76,7 +76,7 @@
 ## ⚙️ Architecture
 
 ```text
-                        DocuMind AI Architecture
+                        PaperPulseAI
 
                     ┌──────────────────────────┐
                     │     React Frontend       │
